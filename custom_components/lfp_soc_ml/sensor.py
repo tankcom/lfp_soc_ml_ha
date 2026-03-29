@@ -50,6 +50,18 @@ BASE_SENSORS: tuple[SensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfElectricPotential.VOLT,
         icon="mdi:sine-wave",
     ),
+    SensorEntityDescription(
+        key="soc_voltage_ml",
+        name="Voltage-ML SoC",
+        native_unit_of_measurement=PERCENTAGE,
+        icon="mdi:chart-scatter-plot",
+    ),
+    SensorEntityDescription(
+        key="voltage_ml_confidence",
+        name="Voltage-ML Confidence",
+        native_unit_of_measurement=PERCENTAGE,
+        icon="mdi:shield-check-outline",
+    ),
 )
 
 
@@ -116,7 +128,7 @@ class LfpSocSensor(LfpBaseCoordinatorEntity, SensorEntity):
         value = self.coordinator.data.get(self.entity_description.key)
         if value is None:
             return None
-        if self.entity_description.key == "confidence":
+        if self.entity_description.key in ("confidence", "voltage_ml_confidence"):
             return round(float(value) * 100.0, 2)
         return float(value)
 
@@ -124,6 +136,8 @@ class LfpSocSensor(LfpBaseCoordinatorEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any] | None:
         if not self.coordinator.data:
             return None
+        if self.entity_description.key == "soc_voltage_ml":
+            return {"n_trained": self.coordinator.data.get("voltage_ml_n_trained")}
         return {
             "operation_mode": self.coordinator.data.get("mode"),
             "last_anchor_type": self.coordinator.data.get("last_anchor_type"),

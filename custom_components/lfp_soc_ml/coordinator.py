@@ -53,6 +53,7 @@ from .const import (
 )
 from .estimation.ml_residual import ResidualModel
 from .estimation.physical_estimator import PhysicalSocEstimator, Snapshot
+from .estimation.voltage_ml import VoltageSocEstimator
 
 
 class LfpSocCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -89,6 +90,8 @@ class LfpSocCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ),
         )
 
+        self._voltage_ml = VoltageSocEstimator()
+
         update_interval = timedelta(seconds=int(merged.get(CONF_UPDATE_INTERVAL_SECONDS, DEFAULT_UPDATE_INTERVAL_SECONDS)))
 
         super().__init__(
@@ -114,14 +117,77 @@ class LfpSocCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         residual = self._residual_model.predict(self._feature_map(snapshot, physical))
 
         soc_physical = float(physical["soc_physical"])
-        soc_final = min(100.0, max(0.0, soc_physical + residual.value))
+        soc_coulomb = min(100.0, max(0.0, soc_physical + residual.value))
         fused_conf = min(1.0, max(0.0, 0.7 * float(physical["confidence"]) + 0.3 * residual.confidence))
+
+        # --- Voltage ML estimator ---
+        if snapshot.module_min_v and snapshot.module_max_v:
+            vml_v_min = min(snapshot.module_min_v)
+            vml_v_max = max(snapshot.module_max_v)
+        elif snapshot.total_voltage is not None:
+            vml_v_min = vml_v_max = snapshot.total_voltage
+        else:
+            vml_v_min = vml_v_max = 0.0
+
+        # raw_power is always positive; sign via known mode
+        vml_mode = physical.get("mode", "idle")
+        if snapshot.charge_power is not None or snapshot.discharge_power is not None:
+            vml_power_kw = ((snapshot.charge_power or 0.0) - (snapshot.discharge_power or 0.0)) / 1000.0
+        elif snapshot.raw_power is not None:
+            if vml_mode == "charging":
+                vml_power_kw = snapshot.raw_power / 1000.0
+            elif vml_mode == "discharging":
+                vml_power_kw = -snapshot.raw_power / 1000.0
+            else:
+                vml_power_kw = 0.0
+        else:
+            vml_power_kw = 0.0
+
+        vml_temp_c = float(snapshot.temp_mid or snapshot.temp_max or snapshot.temp_min or 25.0)
+
+        self._voltage_ml.add_sample(
+            v_min=vml_v_min,
+            v_max=vml_v_max,
+            power_kw=vml_power_kw,
+            temp_c=vml_temp_c,
+            timestamp=snapshot.timestamp,
+        )
+        if snapshot.bms_soc is not None:
+            self._voltage_ml.observe(snapshot.bms_soc)
+
+        # Reinforce with anchor labels when anchor just fired (age < 30 s)
+        anchor_type = physical.get("last_anchor_type")
+        anchor_age = physical.get("last_anchor_age_min")
+        if isinstance(anchor_age, float) and anchor_age < 0.5:
+            if anchor_type == "full":
+                self._voltage_ml.observe(100.0)
+            elif anchor_type == "empty":
+                self._voltage_ml.observe(0.0)
+
+        vml = self._voltage_ml.predict()
+
+        # Blend Coulomb counting + voltage ML
+        if vml.confidence >= 0.30:
+            w_phys = float(physical["confidence"])
+            w_vml = vml.confidence * 0.6
+            total_w = w_phys + w_vml
+            soc_final = (
+                min(100.0, max(0.0, (w_phys * soc_coulomb + w_vml * vml.soc) / total_w))
+                if total_w > 0
+                else soc_coulomb
+            )
+            fused_conf = min(1.0, fused_conf + 0.03)
+        else:
+            soc_final = soc_coulomb
 
         await self._async_periodic_persist()
 
         return {
             "soc": round(soc_final, 3),
             "soc_physical": soc_physical,
+            "soc_voltage_ml": round(vml.soc, 3) if vml.confidence > 0.0 else None,
+            "voltage_ml_confidence": round(vml.confidence, 3),
+            "voltage_ml_n_trained": vml.n_trained,
             "soh": physical.get("soh_estimated"),
             "mode": physical.get("mode"),
             "confidence": round(fused_conf, 3),
@@ -152,6 +218,10 @@ class LfpSocCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if isinstance(residual, dict):
             self._residual_model.import_state(residual)
 
+        voltage_ml = stored.get("voltage_ml")
+        if isinstance(voltage_ml, dict):
+            self._voltage_ml.import_state(voltage_ml)
+
     async def _async_periodic_persist(self) -> None:
         now = datetime.now(timezone.utc)
         if self._last_persist_time is not None and (now - self._last_persist_time).total_seconds() < 60:
@@ -163,6 +233,7 @@ class LfpSocCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "physical": self._physical.export_state(),
             "residual": self._residual_model.export_state(),
+            "voltage_ml": self._voltage_ml.export_state(),
         }
         await self._state_store.async_save(payload)
         self._last_persist_time = now or datetime.now(timezone.utc)

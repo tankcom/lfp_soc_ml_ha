@@ -21,6 +21,8 @@ A Home Assistant custom integration that estimates the **State of Charge (SoC)**
 | `sensor.<name>_soh` | Estimated State of Health (%) |
 | `sensor.<name>_confidence` | Estimation confidence (%) |
 | `sensor.<name>_operation_mode` | Current operation mode of the state machine |
+| `sensor.<name>_soc_voltage_ml` | Voltage-ML SoC estimate (%) |
+| `sensor.<name>_voltage_ml_confidence` | Confidence of the Voltage-ML estimate (%) |
 
 ## Installation via HACS
 
@@ -50,7 +52,7 @@ Optional entities (improve accuracy):
 
 - BMS SoH Entity
 - Charge / Discharge Power Entities (W)
-- Raw Power Entity (signed W)
+- Raw Power Entity (unsigned W; direction is inferred from Charge/Discharge Power or voltage trend)
 - Current (absolute) Entity (A)
 - Temperature Entities (°C)
 - Energy Charged / Discharged Total Entities (kWh)
@@ -61,7 +63,7 @@ Optional entities (improve accuracy):
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | Nominal Capacity (kWh) | 10.0 | Nominal pack energy capacity |
-| Nominal Capacity (Ah) | 280.0 | Nominal pack charge capacity |
+| Nominal Capacity (Ah) | 280.0 | Pack capacity in Amp-hours for Coulomb counting — equals the Ah rating of your cells (e.g. 280 for 280 Ah cells); if unknown, divide kWh × 1000 by nominal cell voltage (e.g. 10 000 Wh / 51.2 V ≈ 195 Ah) |
 | Charge Efficiency | 0.99 | Round-trip charge efficiency factor |
 | Update Interval (s) | 10 | Polling interval in seconds |
 | Balance SoC Threshold (%) | 98.9 | SoC at which cell balancing is assumed complete |
