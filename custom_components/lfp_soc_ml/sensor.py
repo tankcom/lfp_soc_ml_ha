@@ -4,7 +4,7 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, UnitOfElectricCurrent, UnitOfElectricPotential, UnitOfEnergy
+from homeassistant.const import PERCENTAGE, UnitOfElectricCurrent, UnitOfElectricPotential, UnitOfEnergy, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -75,6 +75,18 @@ BASE_SENSORS: tuple[SensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         icon="mdi:lightning-bolt",
     ),
+    SensorEntityDescription(
+        key="time_to_empty_h",
+        name="Time to Empty",
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        icon="mdi:timer-sand-empty",
+    ),
+    SensorEntityDescription(
+        key="time_to_full_h",
+        name="Time to Full",
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        icon="mdi:timer-sand-full",
+    ),
 )
 
 
@@ -93,6 +105,7 @@ async def async_setup_entry(
     initial_spreads = coordinator.data.get("imbalance_spreads_v", []) if coordinator.data else []
     for idx in range(len(initial_spreads)):
         entities.append(LfpImbalanceModuleSensor(coordinator=coordinator, entry=entry, module_index=idx))
+        entities.append(LfpModuleSohSensor(coordinator=coordinator, entry=entry, module_index=idx))
 
     entities.append(LfpDiagnosticTextSensor(coordinator=coordinator, entry=entry, key="mode", name="Operation Mode"))
     entities.append(
@@ -161,6 +174,16 @@ class LfpSocSensor(LfpBaseCoordinatorEntity, SensorEntity):
             return None
         if self.entity_description.key == "soc_voltage_ml":
             return {"n_trained": self.coordinator.data.get("voltage_ml_n_trained")}
+        if self.entity_description.key == "soh":
+            return {
+                "soh_method": self.coordinator.data.get("soh_method"),
+                "partial_cycle_n_estimates": self.coordinator.data.get("soh_partial_n_estimates", 0),
+            }
+        if self.entity_description.key in ("time_to_empty_h", "time_to_full_h"):
+            return {
+                "power_smoothed_kw": self.coordinator.data.get("power_smoothed_kw"),
+                "operation_mode": self.coordinator.data.get("mode"),
+            }
         return {
             "operation_mode": self.coordinator.data.get("mode"),
             "last_anchor_type": self.coordinator.data.get("last_anchor_type"),
@@ -193,6 +216,36 @@ class LfpImbalanceModuleSensor(LfpBaseCoordinatorEntity, SensorEntity):
         return {
             "spread_v": spread_v,
             "ocv_n_observed": self.coordinator.data.get("ocv_n_observed", 0),
+        }
+
+
+class LfpModuleSohSensor(LfpBaseCoordinatorEntity, SensorEntity):
+    """Per-module SoH sensor derived from OCV-based partial-cycle analysis."""
+
+    def __init__(self, coordinator: LfpSocCoordinator, entry: ConfigEntry, module_index: int) -> None:
+        super().__init__(coordinator=coordinator, entry=entry)
+        self._module_index = module_index
+        self._attr_unique_id = f"{entry.entry_id}_module_soh_{module_index + 1}"
+        self._attr_name = f"Module {module_index + 1} SoH"
+        self._attr_native_unit_of_measurement = PERCENTAGE
+        self._attr_icon = "mdi:battery-heart-variant"
+
+    @property
+    def native_value(self) -> float | None:
+        soh_list = self.coordinator.data.get("module_soh_pct", []) if self.coordinator.data else []
+        if self._module_index >= len(soh_list):
+            return None
+        return soh_list[self._module_index]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        if not self.coordinator.data:
+            return None
+        cap_list = self.coordinator.data.get("module_capacity_kwh", [])
+        cap = cap_list[self._module_index] if self._module_index < len(cap_list) else None
+        return {
+            "capacity_kwh": round(cap, 3) if cap is not None else None,
+            "module_soh_n_estimates": self.coordinator.data.get("module_soh_n_estimates", 0),
         }
 
 

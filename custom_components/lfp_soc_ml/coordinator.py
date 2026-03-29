@@ -58,6 +58,8 @@ from .estimation.voltage_ml import VoltageSocEstimator
 
 class LfpSocCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     _STORE_VERSION = 1
+    _POWER_EMA_ALPHA = 0.25
+    _MIN_ESTIMATION_POWER_KW = 0.05
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.hass = hass
@@ -68,6 +70,7 @@ class LfpSocCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._state_store = Store[dict[str, Any]](hass, self._STORE_VERSION, f"{DOMAIN}_{entry.entry_id}_state")
         self._state_loaded = False
         self._last_persist_time: datetime | None = None
+        self._power_ema_kw: float | None = None
 
         self._residual_model = ResidualModel(
             learning_enabled=bool(merged.get(CONF_HISTORY_LEARNING_ENABLED, DEFAULT_HISTORY_LEARNING_ENABLED)),
@@ -182,10 +185,27 @@ class LfpSocCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         nominal_kwh = float(self._cfg.get(CONF_NOMINAL_CAPACITY_KWH, DEFAULT_NOMINAL_CAPACITY_KWH))
         soh_pct = physical.get("soh_estimated")
-        if soh_pct is None and snapshot.bms_soh is not None:
-            soh_pct = snapshot.bms_soh
+        soh_method = physical.get("soh_method")
         soh_factor = (float(soh_pct) / 100.0) if soh_pct is not None else 1.0
         usable_energy_kwh = round(nominal_kwh * soh_factor * soc_final / 100.0, 3)
+        total_usable_capacity_kwh = nominal_kwh * soh_factor
+
+        # Apply light smoothing so ETA sensors do not jump on short spikes.
+        if self._power_ema_kw is None:
+            self._power_ema_kw = vml_power_kw
+        else:
+            alpha = self._POWER_EMA_ALPHA
+            self._power_ema_kw = alpha * vml_power_kw + (1.0 - alpha) * self._power_ema_kw
+
+        time_to_empty_h: float | None = None
+        time_to_full_h: float | None = None
+        smooth_power_kw = float(self._power_ema_kw)
+        if smooth_power_kw <= -self._MIN_ESTIMATION_POWER_KW:
+            discharge_kw = abs(smooth_power_kw)
+            time_to_empty_h = round(usable_energy_kwh / discharge_kw, 2) if discharge_kw > 0 else None
+        elif smooth_power_kw >= self._MIN_ESTIMATION_POWER_KW:
+            remaining_kwh = max(0.0, total_usable_capacity_kwh - usable_energy_kwh)
+            time_to_full_h = round(remaining_kwh / smooth_power_kw, 2) if smooth_power_kw > 0 else None
 
         await self._async_periodic_persist()
 
@@ -196,9 +216,14 @@ class LfpSocCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "voltage_ml_confidence": round(vml.confidence, 3),
             "voltage_ml_n_trained": vml.n_trained,
             "soh": physical.get("soh_estimated"),
+            "soh_method": soh_method,
+            "soh_partial_n_estimates": physical.get("soh_partial_n_estimates", 0),
             "mode": physical.get("mode"),
             "confidence": round(fused_conf, 3),
             "usable_energy_kwh": usable_energy_kwh,
+            "time_to_empty_h": time_to_empty_h,
+            "time_to_full_h": time_to_full_h,
+            "power_smoothed_kw": round(smooth_power_kw, 3),
             "last_anchor_type": physical.get("last_anchor_type"),
             "last_anchor_age_min": physical.get("last_anchor_age_min"),
             "signed_current_a": physical.get("signed_current_a"),
@@ -209,6 +234,9 @@ class LfpSocCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "imbalance_median_v": physical.get("imbalance_median_v"),
             "intra_module_imbalance_pct": physical.get("intra_module_imbalance_pct", []),
             "inter_module_imbalance_pct": physical.get("inter_module_imbalance_pct"),
+            "module_soh_pct": physical.get("module_soh_pct", []),
+            "module_capacity_kwh": physical.get("module_capacity_kwh", []),
+            "module_soh_n_estimates": physical.get("module_soh_n_estimates", 0),
             "ocv_n_observed": physical.get("ocv_n_observed", 0),
         }
 

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from .imbalance import OcvCurve, imbalance_summary, inter_module_imbalance_pct, intra_module_imbalance_pct, module_spreads
-from .soh import SohEstimator
+from .soh import ModuleSohTracker, PartialCycleSohEstimator, SohEstimator
 from .state_machine import OperationMode, infer_mode
 
 
@@ -47,6 +47,16 @@ class PhysicalSocEstimator:
         self._max_soc_step_per_update = max(0.2, max_soc_step_per_update)
 
         self._soh_estimator = SohEstimator(nominal_capacity_kwh=nominal_capacity_kwh)
+        self._soh_partial = PartialCycleSohEstimator(
+            nominal_capacity_kwh=nominal_capacity_kwh,
+            charge_efficiency=charge_efficiency,
+        )
+        self._module_soh = ModuleSohTracker(
+            nominal_capacity_kwh=nominal_capacity_kwh,
+            charge_efficiency=charge_efficiency,
+            balance_soc_threshold=balance_soc_threshold,
+            balance_spread_threshold_v=balance_spread_threshold_v,
+        )
         self._ocv_curve = OcvCurve()
 
         self._soc_estimate: float | None = None
@@ -119,9 +129,39 @@ class PhysicalSocEstimator:
             self._last_anchor_type = "empty"
             self._soh_estimator.on_anchor_0(snapshot.discharged_total_kwh)
 
+        # Partial-cycle SoH: feeds every tick, evaluates on sufficient SoC swing
+        if snapshot.bms_soc is not None:
+            self._soh_partial.update(
+                bms_soc=snapshot.bms_soc,
+                charged_total_kwh=snapshot.charged_total_kwh,
+                discharged_total_kwh=snapshot.discharged_total_kwh,
+            )
+
+        # Per-module SoH: track SoC swings per module via OCV curve
+        if snapshot.module_min_v and snapshot.module_max_v:
+            module_mid_v = [
+                (lo + hi) / 2.0
+                for lo, hi in zip(snapshot.module_min_v, snapshot.module_max_v, strict=False)
+            ]
+            self._module_soh.update(
+                module_mid_v=module_mid_v,
+                ocv_curve=self._ocv_curve,
+                charged_total_kwh=snapshot.charged_total_kwh,
+                discharged_total_kwh=snapshot.discharged_total_kwh,
+                bms_soc=snapshot.bms_soc,
+                spreads=spreads,
+                charge_power=snapshot.charge_power,
+            )
+
+        # SoH priority: full-cycle > partial-cycle > BMS fallback
         soh_estimated = self._soh_estimator.latest_soh_pct
+        soh_method = "full_cycle" if soh_estimated is not None else None
+        if soh_estimated is None and self._soh_partial.latest_soh_pct is not None:
+            soh_estimated = self._soh_partial.latest_soh_pct
+            soh_method = "partial_cycle"
         if soh_estimated is None and snapshot.bms_soh is not None:
             soh_estimated = snapshot.bms_soh
+            soh_method = "bms"
 
         self._last_timestamp = timestamp
 
@@ -144,6 +184,11 @@ class PhysicalSocEstimator:
             "intra_module_imbalance_pct": [round(p, 2) for p in intra_pct],
             "inter_module_imbalance_pct": round(inter_pct, 2),
             "ocv_n_observed": self._ocv_curve.n_observed,
+            "soh_method": soh_method,
+            "soh_partial_n_estimates": self._soh_partial.n_estimates,
+            "module_soh_pct": self._module_soh.get_module_soh_pct(len(snapshot.module_min_v)),
+            "module_capacity_kwh": self._module_soh.get_module_capacity_kwh(len(snapshot.module_min_v)),
+            "module_soh_n_estimates": self._module_soh.get_total_n_estimates(),
             "confidence": round(confidence, 3),
         }
 
@@ -222,6 +267,8 @@ class PhysicalSocEstimator:
             "last_signed_current": self._last_signed_current,
             "voltage_history": list(self._voltage_history),
             "soh": self._soh_estimator.export_state(),
+            "soh_partial": self._soh_partial.export_state(),
+            "module_soh": self._module_soh.export_state(),
             "ocv_curve": self._ocv_curve.export_state(),
         }
 
@@ -262,6 +309,14 @@ class PhysicalSocEstimator:
         soh = state.get("soh")
         if isinstance(soh, dict):
             self._soh_estimator.import_state(soh)
+
+        soh_partial = state.get("soh_partial")
+        if isinstance(soh_partial, dict):
+            self._soh_partial.import_state(soh_partial)
+
+        module_soh = state.get("module_soh")
+        if isinstance(module_soh, dict):
+            self._module_soh.import_state(module_soh)
 
         ocv = state.get("ocv_curve")
         if isinstance(ocv, dict):
