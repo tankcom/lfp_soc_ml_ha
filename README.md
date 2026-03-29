@@ -28,16 +28,11 @@ A Home Assistant custom integration that estimates the **State of Charge (SoC)**
 
 1. Open HACS in Home Assistant.
 2. Go to **Integrations** → three-dot menu → **Custom repositories**.
-3. Add `https://github.com/tankcom/lfp_soc_ml` as type **Integration**.
+3. Add `https://github.com/tankcom/lfp_soc_ml_ha` as type **Integration**.
 4. Search for **LFP SOC ML Estimator** and install it.
 5. Restart Home Assistant.
 6. Go to **Settings → Devices & Services → Add Integration** and search for **LFP SOC ML**.
 
-### Versioning for HACS
-
-HACS uses Git tags/releases for selectable versions. If there is no tag, HACS falls back to a commit hash (for example `40bf41f`), which cannot be used as integration version.
-
-Make sure every published version in `custom_components/lfp_soc_ml/manifest.json` is also available as a Git tag (for example `0.1.0`) and as a GitHub release.
 
 ## Manual Installation
 
@@ -82,10 +77,11 @@ Optional entities (improve accuracy):
 | History Learning Rate | 0.05 | Learning rate for residual correction |
 | History Max Residual (%) | 15.0 | Outlier threshold for residual samples |
 
+## Prior Work
+
+- This addon is based on prior Work by [alexdatadesign](https://github.com/alexdatadesign/lfp_soc_ml)
+
 ## Requirements
 
 - Home Assistant ≥ 2023.1.0
 
-## License
-
-MIT
