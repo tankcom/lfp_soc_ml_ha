@@ -3,10 +3,12 @@
   "name": "LFP SOC ML Estimator",
   "version": "0.1.0",
   "documentation": "https://github.com/schre/lfp_soc_ml",
+  "issue_tracker": "https://github.com/schre/lfp_soc_ml/issues",
   "requirements": [],
   "codeowners": [
     "@schre"
   ],
   "config_flow": true,
-  "iot_class": "local_polling"
+  "iot_class": "local_polling",
+  "homeassistant": "2023.1.0"
 }
