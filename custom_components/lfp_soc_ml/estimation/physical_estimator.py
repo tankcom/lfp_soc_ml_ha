@@ -4,7 +4,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from .imbalance import imbalance_summary, module_spreads
+from .imbalance import OcvCurve, imbalance_summary, inter_module_imbalance_pct, intra_module_imbalance_pct, module_spreads
 from .soh import SohEstimator
 from .state_machine import OperationMode, infer_mode
 
@@ -47,6 +47,7 @@ class PhysicalSocEstimator:
         self._max_soc_step_per_update = max(0.2, max_soc_step_per_update)
 
         self._soh_estimator = SohEstimator(nominal_capacity_kwh=nominal_capacity_kwh)
+        self._ocv_curve = OcvCurve()
 
         self._soc_estimate: float | None = None
         self._last_timestamp: datetime | None = None
@@ -61,6 +62,13 @@ class PhysicalSocEstimator:
         spreads = module_spreads(snapshot.module_min_v, snapshot.module_max_v)
         spread_summary = imbalance_summary(spreads)
 
+        intra_pct = intra_module_imbalance_pct(
+            snapshot.module_min_v, snapshot.module_max_v, self._ocv_curve,
+        )
+        inter_pct = inter_module_imbalance_pct(
+            snapshot.module_min_v, snapshot.module_max_v, self._ocv_curve,
+        )
+
         voltage_trend = 0.0
         if snapshot.total_voltage is not None:
             self._voltage_history.append(snapshot.total_voltage)
@@ -73,6 +81,21 @@ class PhysicalSocEstimator:
             raw_power=snapshot.raw_power,
             voltage_trend=voltage_trend,
         )
+
+        # Train OCV curve during rest when we have cell voltages and a BMS SoC reference
+        if (
+            mode == OperationMode.IDLE
+            and snapshot.bms_soc is not None
+            and snapshot.module_min_v
+            and snapshot.module_max_v
+        ):
+            # Use the mean cell voltage across all modules as OCV sample
+            all_cell_v = [
+                (lo + hi) / 2.0
+                for lo, hi in zip(snapshot.module_min_v, snapshot.module_max_v, strict=False)
+            ]
+            avg_cell_v = sum(all_cell_v) / len(all_cell_v)
+            self._ocv_curve.observe(avg_cell_v, snapshot.bms_soc)
 
         signed_current = self._signed_current(snapshot, mode)
         self._last_signed_current = signed_current
@@ -118,6 +141,9 @@ class PhysicalSocEstimator:
             "imbalance_spreads_v": [round(s, 5) for s in spreads],
             "imbalance_max_v": round(spread_summary["max_v"], 5),
             "imbalance_median_v": round(spread_summary["median_v"], 5),
+            "intra_module_imbalance_pct": [round(p, 2) for p in intra_pct],
+            "inter_module_imbalance_pct": round(inter_pct, 2),
+            "ocv_n_observed": self._ocv_curve.n_observed,
             "confidence": round(confidence, 3),
         }
 
@@ -196,6 +222,7 @@ class PhysicalSocEstimator:
             "last_signed_current": self._last_signed_current,
             "voltage_history": list(self._voltage_history),
             "soh": self._soh_estimator.export_state(),
+            "ocv_curve": self._ocv_curve.export_state(),
         }
 
     def import_state(self, state: dict[str, object]) -> None:
@@ -235,3 +262,7 @@ class PhysicalSocEstimator:
         soh = state.get("soh")
         if isinstance(soh, dict):
             self._soh_estimator.import_state(soh)
+
+        ocv = state.get("ocv_curve")
+        if isinstance(ocv, dict):
+            self._ocv_curve.import_state(ocv)

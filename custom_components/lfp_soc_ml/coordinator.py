@@ -180,6 +180,13 @@ class LfpSocCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         else:
             soc_final = soc_coulomb
 
+        nominal_kwh = float(self._cfg.get(CONF_NOMINAL_CAPACITY_KWH, DEFAULT_NOMINAL_CAPACITY_KWH))
+        soh_pct = physical.get("soh_estimated")
+        if soh_pct is None and snapshot.bms_soh is not None:
+            soh_pct = snapshot.bms_soh
+        soh_factor = (float(soh_pct) / 100.0) if soh_pct is not None else 1.0
+        usable_energy_kwh = round(nominal_kwh * soh_factor * soc_final / 100.0, 3)
+
         await self._async_periodic_persist()
 
         return {
@@ -191,6 +198,7 @@ class LfpSocCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "soh": physical.get("soh_estimated"),
             "mode": physical.get("mode"),
             "confidence": round(fused_conf, 3),
+            "usable_energy_kwh": usable_energy_kwh,
             "last_anchor_type": physical.get("last_anchor_type"),
             "last_anchor_age_min": physical.get("last_anchor_age_min"),
             "signed_current_a": physical.get("signed_current_a"),
@@ -199,6 +207,9 @@ class LfpSocCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "imbalance_spreads_v": physical.get("imbalance_spreads_v", []),
             "imbalance_max_v": physical.get("imbalance_max_v"),
             "imbalance_median_v": physical.get("imbalance_median_v"),
+            "intra_module_imbalance_pct": physical.get("intra_module_imbalance_pct", []),
+            "inter_module_imbalance_pct": physical.get("inter_module_imbalance_pct"),
+            "ocv_n_observed": physical.get("ocv_n_observed", 0),
         }
 
     async def async_shutdown(self) -> None:

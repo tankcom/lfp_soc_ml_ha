@@ -4,8 +4,9 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, UnitOfElectricCurrent, UnitOfElectricPotential
+from homeassistant.const import PERCENTAGE, UnitOfElectricCurrent, UnitOfElectricPotential, UnitOfEnergy
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -62,6 +63,18 @@ BASE_SENSORS: tuple[SensorEntityDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
         icon="mdi:shield-check-outline",
     ),
+    SensorEntityDescription(
+        key="inter_module_imbalance_pct",
+        name="Inter-Module Imbalance",
+        native_unit_of_measurement=PERCENTAGE,
+        icon="mdi:arrow-left-right",
+    ),
+    SensorEntityDescription(
+        key="usable_energy_kwh",
+        name="Usable Energy",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        icon="mdi:lightning-bolt",
+    ),
 )
 
 
@@ -106,6 +119,16 @@ class LfpBaseCoordinatorEntity(CoordinatorEntity[LfpSocCoordinator]):
     def __init__(self, coordinator: LfpSocCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
         self._entry = entry
+        self._attr_has_entity_name = True
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._entry.entry_id)},
+            name=self._entry.title,
+            manufacturer="tankcom",
+            model="LFP SOC ML Estimator",
+        )
 
 
 class LfpSocSensor(LfpBaseCoordinatorEntity, SensorEntity):
@@ -150,16 +173,27 @@ class LfpImbalanceModuleSensor(LfpBaseCoordinatorEntity, SensorEntity):
         super().__init__(coordinator=coordinator, entry=entry)
         self._module_index = module_index
         self._attr_unique_id = f"{entry.entry_id}_imbalance_module_{module_index + 1}"
-        self._attr_name = f"Module {module_index + 1} Imbalance"
-        self._attr_native_unit_of_measurement = UnitOfElectricPotential.VOLT
-        self._attr_icon = "mdi:sine-wave"
+        self._attr_name = f"Module {module_index + 1} Cell Imbalance"
+        self._attr_native_unit_of_measurement = PERCENTAGE
+        self._attr_icon = "mdi:battery-sync"
 
     @property
     def native_value(self) -> float | None:
-        spreads = self.coordinator.data.get("imbalance_spreads_v", []) if self.coordinator.data else []
-        if self._module_index >= len(spreads):
+        pcts = self.coordinator.data.get("intra_module_imbalance_pct", []) if self.coordinator.data else []
+        if self._module_index >= len(pcts):
             return None
-        return float(spreads[self._module_index])
+        return round(float(pcts[self._module_index]), 2)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        if not self.coordinator.data:
+            return None
+        spreads = self.coordinator.data.get("imbalance_spreads_v", [])
+        spread_v = spreads[self._module_index] if self._module_index < len(spreads) else None
+        return {
+            "spread_v": spread_v,
+            "ocv_n_observed": self.coordinator.data.get("ocv_n_observed", 0),
+        }
 
 
 class LfpDiagnosticTextSensor(LfpBaseCoordinatorEntity, SensorEntity):
