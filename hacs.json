@@ -1,0 +1,5 @@
+{
+  "name": "LFP SOC ML Estimator",
+  "render_readme": true,
+  "homeassistant": "2023.1.0"
+}

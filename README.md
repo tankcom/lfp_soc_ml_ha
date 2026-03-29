@@ -33,6 +33,12 @@ A Home Assistant custom integration that estimates the **State of Charge (SoC)**
 5. Restart Home Assistant.
 6. Go to **Settings → Devices & Services → Add Integration** and search for **LFP SOC ML**.
 
+### Versioning for HACS
+
+HACS uses Git tags/releases for selectable versions. If there is no tag, HACS falls back to a commit hash (for example `40bf41f`), which cannot be used as integration version.
+
+Make sure every published version in `custom_components/lfp_soc_ml/manifest.json` is also available as a Git tag (for example `0.1.0`) and as a GitHub release.
+
 ## Manual Installation
 
 1. Copy `custom_components/lfp_soc_ml/` into your Home Assistant `config/custom_components/` directory.

@@ -275,9 +275,16 @@ class LfpSocCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             module_max_v=module_max_v,
         )
 
-    def _entity_list_values(self, csv_entity_ids: str) -> list[float]:
+    def _entity_list_values(self, entity_ids: str | list[str]) -> list[float]:
         values: list[float] = []
-        for entity_id in [x.strip() for x in csv_entity_ids.split(",") if x.strip()]:
+        if isinstance(entity_ids, list):
+            raw_ids = [x.strip() for x in entity_ids if isinstance(x, str) and x.strip()]
+        elif isinstance(entity_ids, str):
+            raw_ids = [x.strip() for x in entity_ids.split(",") if x.strip()]
+        else:
+            raw_ids = []
+
+        for entity_id in raw_ids:
             value = self._state_float(entity_id)
             if value is not None:
                 values.append(value)

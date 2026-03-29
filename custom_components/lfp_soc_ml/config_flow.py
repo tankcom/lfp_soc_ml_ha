@@ -5,6 +5,7 @@ from typing import Any
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.const import CONF_NAME
+from homeassistant.helpers import selector
 
 from .const import (
     CONF_BALANCE_SOC_THRESHOLD,
@@ -52,88 +53,156 @@ from .const import (
 )
 
 
+def _entity_default(current: dict[str, Any], key: str) -> str:
+    value = current.get(key, "")
+    if isinstance(value, str):
+        return value
+    return ""
+
+
+def _entity_list_default(current: dict[str, Any], key: str) -> list[str]:
+    value = current.get(key, [])
+    if isinstance(value, list):
+        return [str(item) for item in value if isinstance(item, str) and item]
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return []
+
+
 def _build_full_schema(current: dict[str, Any]) -> vol.Schema:
     return vol.Schema(
         {
-            vol.Required(CONF_NAME, default=current.get(CONF_NAME, DEFAULT_NAME)): str,
-            vol.Required(CONF_BMS_SOC_ENTITY, default=current.get(CONF_BMS_SOC_ENTITY, "")): str,
-            vol.Optional(CONF_BMS_SOH_ENTITY, default=current.get(CONF_BMS_SOH_ENTITY, "")): str,
-            vol.Required(CONF_TOTAL_VOLTAGE_ENTITY, default=current.get(CONF_TOTAL_VOLTAGE_ENTITY, "")): str,
-            vol.Optional(CONF_CHARGE_POWER_ENTITY, default=current.get(CONF_CHARGE_POWER_ENTITY, "")): str,
-            vol.Optional(CONF_DISCHARGE_POWER_ENTITY, default=current.get(CONF_DISCHARGE_POWER_ENTITY, "")): str,
-            vol.Optional(CONF_RAW_POWER_ENTITY, default=current.get(CONF_RAW_POWER_ENTITY, "")): str,
-            vol.Optional(CONF_CURRENT_ABS_ENTITY, default=current.get(CONF_CURRENT_ABS_ENTITY, "")): str,
-            vol.Optional(CONF_TEMPERATURE_MIN_ENTITY, default=current.get(CONF_TEMPERATURE_MIN_ENTITY, "")): str,
-            vol.Optional(CONF_TEMPERATURE_MAX_ENTITY, default=current.get(CONF_TEMPERATURE_MAX_ENTITY, "")): str,
-            vol.Optional(CONF_TEMPERATURE_ENTITY, default=current.get(CONF_TEMPERATURE_ENTITY, "")): str,
+            vol.Required(CONF_NAME, default=current.get(CONF_NAME, DEFAULT_NAME)): selector.TextSelector(
+                selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+            ),
+            vol.Required(CONF_BMS_SOC_ENTITY, default=_entity_default(current, CONF_BMS_SOC_ENTITY)): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_BMS_SOH_ENTITY, default=_entity_default(current, CONF_BMS_SOH_ENTITY)): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Required(
+                CONF_TOTAL_VOLTAGE_ENTITY,
+                default=_entity_default(current, CONF_TOTAL_VOLTAGE_ENTITY),
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+            vol.Optional(
+                CONF_CHARGE_POWER_ENTITY,
+                default=_entity_default(current, CONF_CHARGE_POWER_ENTITY),
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+            vol.Optional(
+                CONF_DISCHARGE_POWER_ENTITY,
+                default=_entity_default(current, CONF_DISCHARGE_POWER_ENTITY),
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+            vol.Optional(CONF_RAW_POWER_ENTITY, default=_entity_default(current, CONF_RAW_POWER_ENTITY)): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(
+                CONF_CURRENT_ABS_ENTITY,
+                default=_entity_default(current, CONF_CURRENT_ABS_ENTITY),
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+            vol.Optional(
+                CONF_TEMPERATURE_MIN_ENTITY,
+                default=_entity_default(current, CONF_TEMPERATURE_MIN_ENTITY),
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+            vol.Optional(
+                CONF_TEMPERATURE_MAX_ENTITY,
+                default=_entity_default(current, CONF_TEMPERATURE_MAX_ENTITY),
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+            vol.Optional(CONF_TEMPERATURE_ENTITY, default=_entity_default(current, CONF_TEMPERATURE_ENTITY)): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor")
+            ),
             vol.Optional(
                 CONF_ENERGY_CHARGED_TOTAL_ENTITY,
-                default=current.get(CONF_ENERGY_CHARGED_TOTAL_ENTITY, ""),
-            ): str,
+                default=_entity_default(current, CONF_ENERGY_CHARGED_TOTAL_ENTITY),
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
             vol.Optional(
                 CONF_ENERGY_DISCHARGED_TOTAL_ENTITY,
-                default=current.get(CONF_ENERGY_DISCHARGED_TOTAL_ENTITY, ""),
-            ): str,
+                default=_entity_default(current, CONF_ENERGY_DISCHARGED_TOTAL_ENTITY),
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
             vol.Optional(
                 CONF_MODULE_MIN_VOLTAGE_ENTITIES,
-                default=current.get(CONF_MODULE_MIN_VOLTAGE_ENTITIES, ""),
-            ): str,
+                default=_entity_list_default(current, CONF_MODULE_MIN_VOLTAGE_ENTITIES),
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", multiple=True)),
             vol.Optional(
                 CONF_MODULE_MAX_VOLTAGE_ENTITIES,
-                default=current.get(CONF_MODULE_MAX_VOLTAGE_ENTITIES, ""),
-            ): str,
+                default=_entity_list_default(current, CONF_MODULE_MAX_VOLTAGE_ENTITIES),
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", multiple=True)),
             vol.Optional(
                 CONF_NOMINAL_CAPACITY_KWH,
                 default=current.get(CONF_NOMINAL_CAPACITY_KWH, DEFAULT_NOMINAL_CAPACITY_KWH),
-            ): vol.Coerce(float),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.1, max=1000.0, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
             vol.Optional(
                 CONF_NOMINAL_CAPACITY_AH,
                 default=current.get(CONF_NOMINAL_CAPACITY_AH, DEFAULT_NOMINAL_CAPACITY_AH),
-            ): vol.Coerce(float),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1.0, max=5000.0, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
             vol.Optional(
                 CONF_CHARGE_EFFICIENCY,
                 default=current.get(CONF_CHARGE_EFFICIENCY, DEFAULT_CHARGE_EFFICIENCY),
-            ): vol.Coerce(float),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.8, max=1.0, step=0.001, mode=selector.NumberSelectorMode.BOX)
+            ),
             vol.Optional(
                 CONF_UPDATE_INTERVAL_SECONDS,
                 default=current.get(CONF_UPDATE_INTERVAL_SECONDS, DEFAULT_UPDATE_INTERVAL_SECONDS),
-            ): vol.Coerce(int),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1, max=300, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
             vol.Optional(
                 CONF_BALANCE_SOC_THRESHOLD,
                 default=current.get(CONF_BALANCE_SOC_THRESHOLD, DEFAULT_BALANCE_SOC_THRESHOLD),
-            ): vol.Coerce(float),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=50.0, max=100.0, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
             vol.Optional(
                 CONF_BALANCE_SPREAD_THRESHOLD_V,
                 default=current.get(CONF_BALANCE_SPREAD_THRESHOLD_V, DEFAULT_BALANCE_SPREAD_THRESHOLD_V),
-            ): vol.Coerce(float),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.001, max=0.2, step=0.001, mode=selector.NumberSelectorMode.BOX)
+            ),
             vol.Optional(
                 CONF_DISCHARGE_CUTOFF_CELL_V,
                 default=current.get(CONF_DISCHARGE_CUTOFF_CELL_V, DEFAULT_DISCHARGE_CUTOFF_CELL_V),
-            ): vol.Coerce(float),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=2.0, max=3.5, step=0.01, mode=selector.NumberSelectorMode.BOX)
+            ),
             vol.Optional(
                 CONF_MAX_SOC_STEP_PER_UPDATE,
                 default=current.get(CONF_MAX_SOC_STEP_PER_UPDATE, DEFAULT_MAX_SOC_STEP_PER_UPDATE),
-            ): vol.Coerce(float),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.1, max=20.0, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
             vol.Optional(
                 CONF_HISTORY_LEARNING_ENABLED,
                 default=current.get(CONF_HISTORY_LEARNING_ENABLED, DEFAULT_HISTORY_LEARNING_ENABLED),
-            ): bool,
+            ): selector.BooleanSelector(),
             vol.Optional(
                 CONF_HISTORY_WINDOW_SAMPLES,
                 default=current.get(CONF_HISTORY_WINDOW_SAMPLES, DEFAULT_HISTORY_WINDOW_SAMPLES),
-            ): vol.Coerce(int),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=10, max=20000, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
             vol.Optional(
                 CONF_HISTORY_MIN_SAMPLES,
                 default=current.get(CONF_HISTORY_MIN_SAMPLES, DEFAULT_HISTORY_MIN_SAMPLES),
-            ): vol.Coerce(int),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=3, max=5000, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
             vol.Optional(
                 CONF_HISTORY_LEARNING_RATE,
                 default=current.get(CONF_HISTORY_LEARNING_RATE, DEFAULT_HISTORY_LEARNING_RATE),
-            ): vol.Coerce(float),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.001, max=1.0, step=0.001, mode=selector.NumberSelectorMode.BOX)
+            ),
             vol.Optional(
                 CONF_HISTORY_MAX_RESIDUAL,
                 default=current.get(CONF_HISTORY_MAX_RESIDUAL, DEFAULT_HISTORY_MAX_RESIDUAL),
-            ): vol.Coerce(float),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1.0, max=100.0, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
         }
     )
 
