@@ -2,10 +2,11 @@
   "domain": "lfp_soc_ml",
   "name": "LFP SOC ML Estimator",
   "version": "0.1.0",
-  "documentation": "https://github.com/schre/lfp_soc_ml",
+  "documentation": "https://github.com/tankcom/lfp_soc_ml",
+  "issue_tracker": "https://github.com/tankcom/lfp_soc_ml/issues",
   "requirements": [],
   "codeowners": [
-    "@schre"
+    "@tankcom"
   ],
   "config_flow": true,
   "iot_class": "local_polling"
