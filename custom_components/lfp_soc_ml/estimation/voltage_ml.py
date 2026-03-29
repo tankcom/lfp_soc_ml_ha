@@ -5,9 +5,11 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-_N_FEATURES = 10
+_N_FEATURES = 11
 _MIN_TRAIN_SAMPLES = 60
 _CONFIDENT_TRAIN_SAMPLES = 300
+_TRANSIENT_POWER_DELTA_KW = 2.0  # kW; threshold for detecting a power step
+_TRANSIENT_SETTLING_TIME_S = 10  # seconds after power step to mark as transient
 
 
 @dataclass
@@ -24,6 +26,7 @@ class _Sample:
     v_max: float
     power_kw: float  # signed: positive = charging, negative = discharging
     temp_c: float
+    power_gradient_kw_per_min: float = 0.0  # dP/dt from previous sample
 
 
 class _OnlineLinearModel:
@@ -125,6 +128,8 @@ class VoltageSocEstimator:
         self._model = _OnlineLinearModel()
         # Keep last ~20 min of samples at a 10 s update interval
         self._buffer: deque[_Sample] = deque(maxlen=120)
+        self._last_power_kw: float = 0.0
+        self._last_transient_ts: datetime | None = None
 
     def add_sample(
         self,
@@ -135,6 +140,11 @@ class VoltageSocEstimator:
         temp_c: float,
         timestamp: datetime,
     ) -> None:
+        # Detect power step: |dP| > threshold since last sample
+        power_delta = abs(power_kw - self._last_power_kw)
+        if power_delta > _TRANSIENT_POWER_DELTA_KW:
+            self._last_transient_ts = timestamp.astimezone(timezone.utc)
+
         self._buffer.append(
             _Sample(
                 ts=timestamp.astimezone(timezone.utc),
@@ -142,8 +152,10 @@ class VoltageSocEstimator:
                 v_max=v_max,
                 power_kw=power_kw,
                 temp_c=temp_c,
+                power_gradient_kw_per_min=0.0,  # placeholder, not used anymore
             )
         )
+        self._last_power_kw = power_kw
 
     def observe(self, target_soc: float) -> None:
         """Train the model on a known SoC label (BMS reading or anchor event)."""
@@ -174,7 +186,9 @@ class VoltageSocEstimator:
             conf = max(0.0, conf - 0.20)
         elif abs_power > 2.0:
             conf = max(0.0, conf - 0.10)
-
+        # Penalty for transient: voltage is still settling
+        if features[10] > 0.5:
+            conf = max(0.0, conf - 0.25)
         return VoltageMLResult(soc=round(soc, 3), confidence=round(conf, 3), n_trained=n)
 
     def export_state(self) -> dict[str, object]:
@@ -211,15 +225,23 @@ class VoltageSocEstimator:
         recent_30s = [s for s in self._buffer if (now_ts - s.ts).total_seconds() <= 30]
         is_resting = 1.0 if recent_30s and all(abs(s.power_kw) < 0.1 for s in recent_30s) else 0.0
 
+        # Detect if currently within transient settling window
+        is_transient = 0.0
+        if self._last_transient_ts is not None:
+            age_s = (now_ts - self._last_transient_ts).total_seconds()
+            if age_s < _TRANSIENT_SETTLING_TIME_S:
+                is_transient = 1.0
+
         return [
-            now_s.v_min,      # f0
-            now_s.v_max,      # f1
-            v_spread_now,     # f2
-            v_min_trend,      # f3
-            v_max_trend,      # f4
-            now_s.power_kw,   # f5
-            power_mean_kw,    # f6
-            power_trend_kw,   # f7
-            now_s.temp_c,     # f8
-            is_resting,       # f9
+            now_s.v_min,           # f0
+            now_s.v_max,           # f1
+            v_spread_now,          # f2
+            v_min_trend,           # f3
+            v_max_trend,           # f4
+            now_s.power_kw,        # f5
+            power_mean_kw,         # f6
+            power_trend_kw,        # f7
+            now_s.temp_c,          # f8
+            is_resting,            # f9
+            is_transient,          # f10
         ]
