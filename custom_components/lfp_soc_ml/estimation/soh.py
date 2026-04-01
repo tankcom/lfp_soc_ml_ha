@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .state_machine import OperationMode
+
 
 class SohEstimator:
     """Estimate SoH from observed usable energy between anchor events (100 % → 0 %)."""
@@ -251,8 +253,14 @@ class ModuleSohTracker:
         bms_soc: float | None,
         spreads: list[float],
         charge_power: float | None,
+        mode: OperationMode = OperationMode.IDLE,
     ) -> None:
-        """Feed a new tick.  Call every coordinator update."""
+        """Feed a new tick.  Call every coordinator update.
+
+        OCV-derived SoC is only valid at rest (IDLE).  Energy counters are
+        accumulated across all modes; the SoC anchor is only sampled when the
+        pack is at rest so the cell voltage ≈ true OCV.
+        """
         if charged_total_kwh is None or discharged_total_kwh is None:
             return
         n_modules = len(module_mid_v)
@@ -264,6 +272,19 @@ class ModuleSohTracker:
                 self._segments[idx] = None
             return
 
+        # Invalidate segments whose energy counters went backwards (HA restart etc.)
+        for idx in range(n_modules):
+            seg = self._segments.get(idx)
+            if seg is not None:
+                if charged_total_kwh < seg.charged_start or discharged_total_kwh < seg.discharged_start:
+                    self._segments[idx] = None
+
+        # OCV lookup is only meaningful at rest – skip non-IDLE ticks.
+        # Energy keeps flowing between rest points and is accounted for via
+        # the global charged/discharged counters.
+        if mode != OperationMode.IDLE:
+            return
+
         nominal_per_module = self._nominal_kwh / n_modules
 
         for idx, mid_v in enumerate(module_mid_v):
@@ -271,16 +292,13 @@ class ModuleSohTracker:
             seg = self._segments.get(idx)
 
             if seg is None:
-                self._segments[idx] = _ModuleSegment(module_soc, charged_total_kwh, discharged_total_kwh)
-                continue
-
-            # Counter-reset detection
-            if charged_total_kwh < seg.charged_start or discharged_total_kwh < seg.discharged_start:
+                # Start a fresh segment from this rest point
                 self._segments[idx] = _ModuleSegment(module_soc, charged_total_kwh, discharged_total_kwh)
                 continue
 
             delta_soc = module_soc - seg.soc_start
             if abs(delta_soc) < self._MIN_SOC_SWING:
+                # Not enough OCV swing yet – keep segment open, keep accumulating energy
                 continue
 
             delta_charged = charged_total_kwh - seg.charged_start
@@ -314,6 +332,7 @@ class ModuleSohTracker:
                 min(120.0, max(10.0, (self._capacity_ema[idx] / nominal_per_module) * 100.0)), 2,
             )
 
+            # Anchor this rest point as the new segment start
             self._segments[idx] = _ModuleSegment(module_soc, charged_total_kwh, discharged_total_kwh)
 
     def get_module_soh_pct(self, n_modules: int) -> list[float | None]:

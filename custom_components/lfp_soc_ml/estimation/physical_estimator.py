@@ -151,6 +151,7 @@ class PhysicalSocEstimator:
                 bms_soc=snapshot.bms_soc,
                 spreads=spreads,
                 charge_power=snapshot.charge_power,
+                mode=mode,
             )
 
         # SoH priority: full-cycle > partial-cycle > BMS fallback
